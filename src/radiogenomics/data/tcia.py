@@ -17,10 +17,30 @@ from pathlib import Path
 
 import pandas as pd
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 logger = logging.getLogger(__name__)
 
 TCIA_API = "https://services.cancerimagingarchive.net/services/v4/TCIA"
+
+
+def _make_session() -> requests.Session:
+    """Session with retries so transient TCIA timeouts don't kill the whole run."""
+    session = requests.Session()
+    retry = Retry(
+        total=5,
+        connect=5,
+        read=5,
+        backoff_factor=1.5,  # 1.5s, 3s, 6s, 12s, 24s
+        status_forcelist=(429, 500, 502, 503, 504),
+        allowed_methods=frozenset(["GET"]),
+        raise_on_status=False,
+    )
+    adapter = HTTPAdapter(max_retries=retry, pool_connections=8, pool_maxsize=8)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
 
 
 def search_tcia_ct_series(
@@ -35,20 +55,28 @@ def search_tcia_ct_series(
     body_part_examined. One patient can have multiple series — later stages
     of the pipeline pick one representative series per patient.
     """
+    session = _make_session()
     rows: list[dict] = []
-    for barcode in patient_barcodes:
-        resp = requests.get(
-            f"{TCIA_API}/query/getSeries",
-            params={
-                "Collection": collection,
-                "PatientID": barcode,
-                "Modality": modality,
-            },
-            timeout=60,
-        )
+    for i, barcode in enumerate(patient_barcodes, 1):
+        try:
+            resp = session.get(
+                f"{TCIA_API}/query/getSeries",
+                params={
+                    "Collection": collection,
+                    "PatientID": barcode,
+                    "Modality": modality,
+                },
+                timeout=(15, 120),  # (connect, read)
+            )
+        except requests.RequestException as e:
+            logger.warning("TCIA request error for %s: %s", barcode, e)
+            continue
         if not resp.ok:
             logger.warning("TCIA query failed for %s: %s", barcode, resp.status_code)
             continue
+        if i % 50 == 0:
+            logger.info("TCIA: queried %d / %d patients (%d series so far)",
+                        i, len(patient_barcodes), len(rows))
         for entry in resp.json():
             rows.append(
                 {
