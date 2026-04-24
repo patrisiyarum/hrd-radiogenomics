@@ -50,6 +50,15 @@ def main() -> None:
     )
 
     manifest = hrd.merge(tcia_top, on="bcr_patient_barcode", how="inner")
+    # tcia.py returns raw API-level column names; rename to the manifest schema
+    # documented above so downstream rules (preprocess_all, train_cv) resolve.
+    manifest = manifest.rename(
+        columns={
+            "series_uid": "tcia_series_uid",
+            "study_uid": "tcia_study_uid",
+            "manufacturer": "tcia_manufacturer",
+        }
+    )
     # Scanner manufacturer lookup is deferred to preprocess_all (it reads
     # the actual DICOM headers after download); stub with 'unknown' for now.
     manifest["scanner_manufacturer"] = "unknown"
