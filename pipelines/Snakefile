@@ -1,0 +1,75 @@
+"""Radiogenomics end-to-end pipeline.
+
+Orchestrates the five-step flow from the README:
+    manifest   → preprocess_all   → train_cv   → eval_external
+    (TCGA-OV + TCIA joined)
+"""
+
+from pathlib import Path
+
+configfile: "pipelines/config.yaml"
+
+DATA = Path(config.get("data_dir", "data"))
+MODEL = Path(config.get("model_dir", "models/radiogen_v0"))
+
+
+rule all:
+    input:
+        MODEL / "cv_summary.json",
+        DATA / "external_eval.json",
+
+
+rule download_knijnenburg:
+    """Fetch the Knijnenburg 2018 HRD-label supplementary table."""
+    output:
+        table = DATA / "raw" / "knijnenburg_2018_tableS2.tsv",
+    script:
+        "scripts/download_knijnenburg.py"
+
+
+rule manifest:
+    """Join TCGA-OV HRD labels with TCIA CT series into one manifest."""
+    input:
+        hrd = DATA / "raw" / "knijnenburg_2018_tableS2.tsv",
+    output:
+        manifest = DATA / "manifest.parquet",
+    script:
+        "scripts/build_manifest.py"
+
+
+rule preprocess_all:
+    """Download + preprocess each CT series to the target 96^3 volume."""
+    input:
+        manifest = DATA / "manifest.parquet",
+    output:
+        cache = DATA / "preprocessed" / ".done",
+    script:
+        "scripts/preprocess_all.py"
+
+
+rule train_cv:
+    """5-fold stratified CV training."""
+    input:
+        manifest = DATA / "manifest.parquet",
+        cache = DATA / "preprocessed" / ".done",
+    output:
+        summary = MODEL / "cv_summary.json",
+    params:
+        backbone = config.get("backbone", "monai_densenet"),
+    shell:
+        """
+        python -m radiogenomics.train \
+            --manifest {input.manifest} \
+            --backbone {params.backbone} \
+            --output {MODEL}
+        """
+
+
+rule eval_external:
+    """External validation on a held-out TCIA cohort."""
+    input:
+        summary = MODEL / "cv_summary.json",
+    output:
+        report = DATA / "external_eval.json",
+    script:
+        "scripts/evaluate_external.py"

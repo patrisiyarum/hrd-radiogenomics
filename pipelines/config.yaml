@@ -1,0 +1,19 @@
+data_dir: data
+model_dir: models/radiogen_v0
+
+backbone: monai_densenet       # or "med3d"
+
+# TCIA search parameters
+tcia_collection: TCGA-OV
+modality: CT
+
+# Training hyperparameters
+epochs: 50
+batch_size: 4
+learning_rate: 1.0e-4
+n_folds: 5
+seed: 0
+
+# Preprocessing
+target_shape: [96, 96, 96]
+hu_window: [-200, 250]
