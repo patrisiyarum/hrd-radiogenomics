@@ -2,12 +2,16 @@
 
 TCIA exposes a public REST API at https://services.cancerimagingarchive.net/
 with no authentication for most collections. We use it to:
-  1. Look up CT series for a given TCGA patient barcode.
-  2. Download a specific series into a local directory.
+  1. Look up which patients in a collection have CT imaging.
+  2. Look up CT series for a given TCGA patient barcode.
+  3. Download a specific series into a local directory.
 
 For the TCGA-OV paired imaging analysis, the relevant TCIA collection is
 "TCGA-OV" which contains ~143 patients with preoperative imaging of the
 primary pelvic tumor plus follow-up scans.
+
+Note: the legacy `/services/v4/TCIA/` endpoint is deprecated and
+effectively dead. Current working base is `/nbia-api/services/v1`.
 """
 
 from __future__ import annotations
@@ -22,7 +26,7 @@ from urllib3.util.retry import Retry
 
 logger = logging.getLogger(__name__)
 
-TCIA_API = "https://services.cancerimagingarchive.net/services/v4/TCIA"
+TCIA_API = "https://services.cancerimagingarchive.net/nbia-api/services/v1"
 
 
 def _make_session() -> requests.Session:
@@ -43,6 +47,29 @@ def _make_session() -> requests.Session:
     return session
 
 
+def list_collection_patients(
+    collection: str = "TCGA-OV",
+    session: requests.Session | None = None,
+) -> list[str]:
+    """Return the list of PatientIDs TCIA has for `collection`.
+
+    This is the right first step before calling `search_tcia_ct_series`:
+    Knijnenburg HRD labels are pan-cancer (~10k barcodes), but TCIA only
+    holds imaging for ~143 TCGA-OV patients. Filtering upfront avoids
+    hammering TCIA with ~9,900 pointless per-patient getSeries calls.
+    """
+    session = session or _make_session()
+    resp = session.get(
+        f"{TCIA_API}/getPatient",
+        params={"Collection": collection},
+        timeout=(15, 60),
+    )
+    resp.raise_for_status()
+    patients = [row["PatientId"] for row in resp.json()]
+    logger.info("TCIA: %s collection has %d patients", collection, len(patients))
+    return patients
+
+
 def search_tcia_ct_series(
     patient_barcodes: list[str],
     collection: str = "TCGA-OV",
@@ -52,21 +79,34 @@ def search_tcia_ct_series(
     CT data.
 
     Each row: bcr_patient_barcode, study_uid, series_uid, num_images,
-    body_part_examined. One patient can have multiple series — later stages
-    of the pipeline pick one representative series per patient.
+    body_part_examined, manufacturer. One patient can have multiple series —
+    later stages of the pipeline pick one representative series per patient.
+
+    `patient_barcodes` is intersected with TCIA's patient list for the
+    collection before any per-patient query, so passing the full Knijnenburg
+    barcode list (~10k) is safe and fast.
     """
     session = _make_session()
+    tcia_patients = set(list_collection_patients(collection, session=session))
+    candidates = [b for b in patient_barcodes if b in tcia_patients]
+    logger.info(
+        "TCIA: %d of %d barcodes are in collection %s (querying series for those)",
+        len(candidates),
+        len(patient_barcodes),
+        collection,
+    )
+
     rows: list[dict] = []
-    for i, barcode in enumerate(patient_barcodes, 1):
+    for i, barcode in enumerate(candidates, 1):
         try:
             resp = session.get(
-                f"{TCIA_API}/query/getSeries",
+                f"{TCIA_API}/getSeries",
                 params={
                     "Collection": collection,
                     "PatientID": barcode,
                     "Modality": modality,
                 },
-                timeout=(15, 120),  # (connect, read)
+                timeout=(15, 120),
             )
         except requests.RequestException as e:
             logger.warning("TCIA request error for %s: %s", barcode, e)
@@ -74,9 +114,11 @@ def search_tcia_ct_series(
         if not resp.ok:
             logger.warning("TCIA query failed for %s: %s", barcode, resp.status_code)
             continue
-        if i % 50 == 0:
-            logger.info("TCIA: queried %d / %d patients (%d series so far)",
-                        i, len(patient_barcodes), len(rows))
+        if i % 25 == 0:
+            logger.info(
+                "TCIA: queried %d / %d patients (%d series so far)",
+                i, len(candidates), len(rows),
+            )
         for entry in resp.json():
             rows.append(
                 {
@@ -85,6 +127,7 @@ def search_tcia_ct_series(
                     "series_uid": entry.get("SeriesInstanceUID"),
                     "num_images": int(entry.get("ImageCount", 0)),
                     "body_part_examined": entry.get("BodyPartExamined"),
+                    "manufacturer": entry.get("Manufacturer"),
                 }
             )
     df = pd.DataFrame(rows)
@@ -99,12 +142,13 @@ def search_tcia_ct_series(
 
 def download_series(series_uid: str, out_dir: Path) -> Path:
     """Fetch every DICOM in a series into `out_dir`. Returns the directory."""
+    session = _make_session()
     out_dir.mkdir(parents=True, exist_ok=True)
-    resp = requests.get(
-        f"{TCIA_API}/query/getImage",
+    resp = session.get(
+        f"{TCIA_API}/getImage",
         params={"SeriesInstanceUID": series_uid},
         stream=True,
-        timeout=600,
+        timeout=(30, 600),
     )
     resp.raise_for_status()
     zip_path = out_dir / f"{series_uid}.zip"
