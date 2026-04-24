@@ -92,7 +92,10 @@ def train(cfg: TrainConfig) -> None:
 
 def _build_model(backbone: str) -> nn.Module:
     if backbone == "monai_densenet":
-        return load_monai_densenet(freeze_features=True)
+        # freeze_features=False is correct for the 3D DenseNet — MONAI's
+        # 3D DenseNet121 has no PyTorch-Hub pretrained weights, so the
+        # trunk is randomly initialised and must train end-to-end.
+        return load_monai_densenet(freeze_features=False)
     if backbone == "med3d":
         return load_med3d(freeze_until=3)
     raise ValueError(f"unknown backbone {backbone!r}")
