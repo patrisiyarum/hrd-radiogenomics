@@ -64,10 +64,18 @@ def train(cfg: TrainConfig) -> None:
         opt = torch.optim.AdamW(
             [p for p in model.parameters() if p.requires_grad], lr=cfg.lr,
         )
-        loss_fn = nn.BCEWithLogitsLoss()
+        # Class-weighted BCE so the 71/64 HRD-positive / non-HRD split
+        # doesn't let the model cheat by always predicting the majority class.
+        train_df = manifest.iloc[train_i]
+        n_pos = int((train_df["hrd_class"] == "HRD").sum())
+        n_neg = int((train_df["hrd_class"] == "non-HRD").sum())
+        pos_weight = torch.tensor(
+            [max(n_neg / max(n_pos, 1), 1.0)], dtype=torch.float32, device=device,
+        )
+        loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 
-        train_loader = _make_loader(manifest.iloc[train_i], cfg.batch_size, shuffle=True)
-        val_loader = _make_loader(manifest.iloc[val_i], cfg.batch_size, shuffle=False)
+        train_loader = _make_loader(train_df, cfg.batch_size, shuffle=True, augment=True)
+        val_loader = _make_loader(manifest.iloc[val_i], cfg.batch_size, shuffle=False, augment=False)
 
         best_auroc = 0.0
         for epoch in range(cfg.epochs):
@@ -101,13 +109,13 @@ def _build_model(backbone: str) -> nn.Module:
     raise ValueError(f"unknown backbone {backbone!r}")
 
 
-def _make_loader(df: pd.DataFrame, batch_size: int, shuffle: bool):
+def _make_loader(df: pd.DataFrame, batch_size: int, shuffle: bool, augment: bool = False):
     # Deferred import so the scaffolding is inspectable without a MONAI install.
     from torch.utils.data import DataLoader
 
     from radiogenomics.dataset import VolumeDataset
 
-    return DataLoader(VolumeDataset(df), batch_size=batch_size, shuffle=shuffle)
+    return DataLoader(VolumeDataset(df, augment=augment), batch_size=batch_size, shuffle=shuffle)
 
 
 def _train_epoch(model, loader, opt, loss_fn, device) -> None:

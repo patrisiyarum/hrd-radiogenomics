@@ -1,14 +1,14 @@
 data_dir: data
 model_dir: models/radiogen_v0
 
-backbone: monai_densenet       # or "med3d"
+backbone: med3d                # 3D ResNet-50 (Med3D architecture); or "monai_densenet"
 
 # TCIA search parameters
 tcia_collection: TCGA-OV
 modality: CT
 
 # Training hyperparameters
-epochs: 50
+epochs: 100
 batch_size: 2           # 2 fits a Lambda A10 (24 GB); bump to 4 on A100 (40 GB)
 learning_rate: 1.0e-4
 n_folds: 5
