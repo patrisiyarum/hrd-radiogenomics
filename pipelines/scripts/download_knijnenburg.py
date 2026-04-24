@@ -16,15 +16,13 @@ import requests
 
 logger = logging.getLogger("download_knijnenburg")
 
-# The PanCanAtlas HRD score table. See the paper's supplementary data S2.
-# The Broad hosts a mirror via the firecloud portal; we fall through a
-# couple of known-good URLs.
+# The PanCanAtlas HRD score table hosted by the GDC publications page.
+# File: TCGA.HRD_withSampleID.txt — tab-separated, 10,648 rows, one per
+# TCGA sample. Columns: sampleID, ai1 (NtAI count), lst1 (LST count),
+# hrd-loh (HRD-LOH count), HRD (the summed score).
+# Source:  https://gdc.cancer.gov/about-data/publications/panimmune
 KNIJNENBURG_URLS = [
-    # Primary: Cell Rep supplementary (direct .xlsx that we'd need to extract)
-    "https://api.gdc.cancer.gov/data/ed6e9be8-40f3-454f-9cd2-af0234bbcb60",
-    # Secondary: a mirrored TSV extracted from the supplementary (maintained
-    # by community tools like gdsctools).
-    "https://raw.githubusercontent.com/cBioPortal/tcga-pan-can-public-tools/main/hrd_knijnenburg_2018.tsv",
+    "https://api.gdc.cancer.gov/data/66dd07d7-6366-4774-83c3-5ad1e22b177e",
 ]
 
 
