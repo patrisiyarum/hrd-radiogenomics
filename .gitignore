@@ -37,12 +37,14 @@ coverage.xml
 htmlcov/
 
 # Heavy training artefacts — tracked via DVC / HF Hub, not git
-data/
-models/
-checkpoints/
-wandb/
-lightning_logs/
-runs/
+# Anchored to repo root so they don't match source subpackages like
+# src/radiogenomics/data/ or src/radiogenomics/backbones/.
+/data/
+/models/
+/checkpoints/
+/wandb/
+/lightning_logs/
+/runs/
 
 # Editor
 .vscode/
