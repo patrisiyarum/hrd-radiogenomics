@@ -6,6 +6,10 @@ Per patient:
     3. Run the shared preprocess() pipeline (crop → resample → HU-normalise).
     4. Save to `data/preprocessed/<barcode>.npy`.
     5. Update the manifest row's `scanner_manufacturer` from the DICOM header.
+    6. Optionally delete the raw DICOM directory (CLEANUP_RAW=1) — useful
+       when disk is tight on a laptop: peak usage drops from ~150 GB total
+       to ~2 GB transient because only one patient's DICOMs live on disk
+       at a time. Off by default so debugging retains access to the raw.
 
 The `.done` sentinel is written only if every row preprocessed
 successfully. Partial runs are fine — re-running resumes from the last
@@ -15,6 +19,8 @@ successful patient (stable via file existence check).
 from __future__ import annotations
 
 import logging
+import os
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -41,6 +47,11 @@ def main() -> None:
     manifest = pd.read_parquet(manifest_path)
     n_ok = 0
     scanner_updates: list[tuple[str, str]] = []
+    # Opt-in: delete each patient's raw DICOMs after preprocessing to keep
+    # peak disk use under ~2 GB. Set CLEANUP_RAW=1 in the shell.
+    cleanup = os.environ.get("CLEANUP_RAW", "").lower() in ("1", "true", "yes")
+    if cleanup:
+        logger.info("CLEANUP_RAW=1 — raw DICOM dirs will be deleted after each successful preprocess")
 
     for _, row in manifest.iterrows():
         barcode = row["bcr_patient_barcode"]
@@ -65,6 +76,11 @@ def main() -> None:
             ds = pydicom.dcmread(str(first), stop_before_pixels=True)
             manufacturer = str(getattr(ds, "Manufacturer", "unknown"))
             scanner_updates.append((barcode, manufacturer))
+
+            # Free the raw DICOM now that we've captured everything we need
+            # from it (the preprocessed .npy + the scanner-manufacturer tag).
+            if cleanup:
+                shutil.rmtree(raw_dir, ignore_errors=True)
 
             n_ok += 1
             logger.info("ok: %s", barcode)
