@@ -70,7 +70,10 @@ def preprocess(volume: np.ndarray) -> np.ndarray:
         [
             T.EnsureChannelFirst(channel_dim="no_channel"),
             T.CropForeground(
-                source_key="image",
+                # select_fn returns a boolean mask marking soft-tissue voxels.
+                # source_key is a CropForegroundd (dict-transform) kwarg and
+                # must NOT appear here — the array transform forwards unknown
+                # kwargs into numpy.pad which then rejects them.
                 select_fn=lambda x: (x >= HU_WINDOW[0]) & (x <= HU_WINDOW[1]),
                 margin=4,
             ),

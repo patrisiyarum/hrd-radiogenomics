@@ -83,7 +83,9 @@ def main() -> None:
             n_ok += 1
             logger.info("ok: %s", barcode)
         except Exception as exc:  # noqa: BLE001
-            logger.warning("skip %s: %s", barcode, exc)
+            # exc_info=True so we see the real cause, not just MONAI's
+            # "applying transform <CropForeground>" wrapper.
+            logger.warning("skip %s: %s", barcode, exc, exc_info=True)
 
     # Patch scanner_manufacturer into the manifest so the training-time
     # stratified-CV split can actually stratify on it.
