@@ -16,7 +16,6 @@ the gap rather than crashing the pipeline — we want `snakemake all` to
 succeed for anyone inspecting the scaffolding.
 """
 
-from __future__ import annotations
 
 import json
 import logging
@@ -31,7 +30,6 @@ from radiogenomics.dataset import VolumeDataset
 from radiogenomics.train import _build_model
 
 logger = logging.getLogger("evaluate_external")
-
 
 def main() -> None:
     sm = globals().get("snakemake")
@@ -89,7 +87,6 @@ def main() -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(metrics, indent=2))
     logger.info("external metrics: %s", metrics)
-
 
 if __name__ == "__main__":
     main()

@@ -16,7 +16,6 @@ successfully. Partial runs are fine — re-running resumes from the last
 successful patient (stable via file existence check).
 """
 
-from __future__ import annotations
 
 import logging
 import os
@@ -31,7 +30,6 @@ from radiogenomics.data.tcia import download_series
 from radiogenomics.preprocess import load_dicom_dir, preprocess
 
 logger = logging.getLogger("preprocess_all")
-
 
 def main() -> None:
     sm = globals().get("snakemake")
@@ -97,7 +95,6 @@ def main() -> None:
     done_path.parent.mkdir(parents=True, exist_ok=True)
     done_path.write_text(f"preprocessed {n_ok} / {len(manifest)} patients\n")
     logger.info("preprocessing: %d / %d patients succeeded", n_ok, len(manifest))
-
 
 if __name__ == "__main__":
     main()

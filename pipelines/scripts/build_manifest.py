@@ -11,17 +11,14 @@ in each selected series. It matters for stratified CV because scanner
 variability is the leading confounder in radiomics work.
 """
 
-from __future__ import annotations
 
 import logging
 from pathlib import Path
-
 
 from radiogenomics.data.tcga_ov import load_hrd_labels
 from radiogenomics.data.tcia import search_tcia_ct_series
 
 logger = logging.getLogger("build_manifest")
-
 
 def main() -> None:
     sm = globals().get("snakemake")
@@ -65,7 +62,6 @@ def main() -> None:
         (manifest["hrd_class"] == "HRD").sum(),
         (manifest["hrd_class"] == "non-HRD").sum(),
     )
-
 
 if __name__ == "__main__":
     main()

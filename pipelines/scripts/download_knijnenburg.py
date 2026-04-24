@@ -7,7 +7,6 @@ We mirror a single canonical copy to avoid the paper host going down
 mid-pipeline. If the mirror URL rots, re-host from Cell Rep and update.
 """
 
-from __future__ import annotations
 
 import logging
 from pathlib import Path
@@ -24,7 +23,6 @@ logger = logging.getLogger("download_knijnenburg")
 KNIJNENBURG_URLS = [
     "https://api.gdc.cancer.gov/data/66dd07d7-6366-4774-83c3-5ad1e22b177e",
 ]
-
 
 def main() -> None:
     sm = globals().get("snakemake")
@@ -51,7 +49,6 @@ def main() -> None:
         "Download the Cell Rep 2018 supplementary manually and place it at "
         f"{out}."
     )
-
 
 if __name__ == "__main__":
     main()
