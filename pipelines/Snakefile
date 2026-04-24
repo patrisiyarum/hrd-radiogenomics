@@ -56,12 +56,19 @@ rule train_cv:
         summary = MODEL / "cv_summary.json",
     params:
         backbone = config.get("backbone", "monai_densenet"),
+        epochs = config.get("epochs", 50),
+        batch_size = config.get("batch_size", 4),
+        lr = config.get("learning_rate", 1.0e-4),
     shell:
+        # manifest is positional in the Typer CLI; the rest are --options.
         """
         python -m radiogenomics.train \
-            --manifest {input.manifest} \
+            {input.manifest} \
             --backbone {params.backbone} \
-            --output {MODEL}
+            --output {MODEL} \
+            --epochs {params.epochs} \
+            --batch-size {params.batch_size} \
+            --lr {params.lr}
         """
 
 

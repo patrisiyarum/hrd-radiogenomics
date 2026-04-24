@@ -9,7 +9,7 @@ modality: CT
 
 # Training hyperparameters
 epochs: 50
-batch_size: 4
+batch_size: 2           # 2 fits a Lambda A10 (24 GB); bump to 4 on A100 (40 GB)
 learning_rate: 1.0e-4
 n_folds: 5
 seed: 0
