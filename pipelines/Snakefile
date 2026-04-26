@@ -1,8 +1,18 @@
 """Radiogenomics end-to-end pipeline.
 
-Orchestrates the five-step flow from the README:
-    manifest   → preprocess_all   → train_cv   → eval_external
-    (TCGA-OV + TCIA joined)
+Orchestrates the full flow from public data to a held-out test number:
+
+    download_knijnenburg
+        -> manifest                   (TCGA-OV x TCIA join, ~135 patients)
+            -> preprocess_all         (CT -> 96^3 NumPy cube per patient)
+                -> split_holdout_test (108 dev + 27 test, stratified split)
+                    -> train_cv       (5-fold CV on the 108-patient dev set)
+                        -> eval_test  (ensemble of all 5 folds, scored
+                                       ONCE on the 27-patient test split)
+
+The 27 test patients are isolated before training touches anything, so
+the eval_test rule produces a true held-out test AUROC, not a validation
+AUROC. Every patient is used somewhere; no waste.
 """
 
 from pathlib import Path
@@ -16,7 +26,7 @@ MODEL = Path(config.get("model_dir", "models/radiogen_v0"))
 rule all:
     input:
         MODEL / "cv_summary.json",
-        DATA / "external_eval.json",
+        DATA / "test_eval.json",
 
 
 rule download_knijnenburg:
@@ -47,10 +57,30 @@ rule preprocess_all:
         "scripts/preprocess_all.py"
 
 
-rule train_cv:
-    """5-fold stratified CV training."""
+rule split_holdout_test:
+    """Carve the 27-patient held-out test split off the manifest.
+
+    Stratified on (HRD class x scanner manufacturer). Random seed locked.
+    The dev manifest (108) feeds train_cv; the test manifest (27) is
+    touched only by eval_test."""
     input:
         manifest = DATA / "manifest.parquet",
+    output:
+        dev = DATA / "manifest_dev.parquet",
+        test = DATA / "manifest_test.parquet",
+    script:
+        "scripts/split_holdout_test.py"
+
+
+rule train_cv:
+    """5-fold stratified CV training on the 108-patient dev set.
+
+    Reads manifest_dev.parquet (NOT the full manifest) so the test split
+    is genuinely never seen during training, hyperparameter tuning, or
+    early stopping.
+    """
+    input:
+        manifest = DATA / "manifest_dev.parquet",
         cache = DATA / "preprocessed" / ".done",
     output:
         summary = MODEL / "cv_summary.json",
@@ -72,11 +102,17 @@ rule train_cv:
         """
 
 
-rule eval_external:
-    """External validation on a held-out TCIA cohort."""
+rule eval_test:
+    """Score the 5-fold ensemble on the held-out test split exactly once.
+
+    This is what produces the defensible test-set AUROC. Each test patient
+    gets a probability from every fold model; the ensemble is the mean of
+    those 5 sigmoid outputs. AUROC + AUPRC + per-patient predictions land
+    in data/test_eval.json."""
     input:
         summary = MODEL / "cv_summary.json",
+        test_manifest = DATA / "manifest_test.parquet",
     output:
-        report = DATA / "external_eval.json",
+        report = DATA / "test_eval.json",
     script:
-        "scripts/evaluate_external.py"
+        "scripts/eval_test.py"
