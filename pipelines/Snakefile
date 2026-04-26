@@ -27,6 +27,7 @@ rule all:
     input:
         MODEL / "cv_summary.json",
         DATA / "test_eval.json",
+        DATA / "radiomics_test_eval.json",
 
 
 rule download_knijnenburg:
@@ -116,3 +117,55 @@ rule eval_test:
         report = DATA / "test_eval.json",
     script:
         "scripts/eval_test.py"
+
+
+# ---------------------------------------------------------------------------
+# Classical-radiomics arm — re-implements Pan et al. 2024 (Front Oncol) on
+# the same TCGA-OV cohort and held-out split as the deep model so the two
+# approaches are directly comparable.
+# ---------------------------------------------------------------------------
+
+rule radiomics_features:
+    """Extract PyRadiomics features (intratumoral + peritumoral, ~1500 each)
+    for every preprocessed volume.
+
+    Foreground threshold + 3-voxel binary dilation produces the two regions.
+    Output is one parquet row per patient with all features as columns."""
+    input:
+        manifest = DATA / "manifest.parquet",
+        cache = DATA / "preprocessed" / ".done",
+    output:
+        features = DATA / "radiomics_features.parquet",
+    script:
+        "scripts/extract_radiomics_features.py"
+
+
+rule train_radiomics:
+    """LASSO logistic-regression classifier on the dev split (108 patients).
+
+    Mann-Whitney univariate filter -> LogisticRegressionCV (l1, saga,
+    5-fold internal CV to pick alpha) -> refit on all dev patients.
+    Persists the fitted scaler + selected feature names + model."""
+    input:
+        features = DATA / "radiomics_features.parquet",
+        dev_manifest = DATA / "manifest_dev.parquet",
+    output:
+        model = MODEL / "radiomics_lasso.pkl",
+        summary = MODEL / "radiomics_train_summary.json",
+    script:
+        "scripts/train_radiomics.py"
+
+
+rule eval_radiomics_test:
+    """Score the trained LASSO model on the 27-patient held-out test split.
+
+    Same patients as the deep model's eval_test rule, so the two test
+    AUROCs are apples-to-apples comparable."""
+    input:
+        features = DATA / "radiomics_features.parquet",
+        test_manifest = DATA / "manifest_test.parquet",
+        model = MODEL / "radiomics_lasso.pkl",
+    output:
+        report = DATA / "radiomics_test_eval.json",
+    script:
+        "scripts/eval_radiomics_test.py"

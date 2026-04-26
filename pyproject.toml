@@ -22,6 +22,10 @@ dependencies = [
     # Classical + eval
     "scikit-learn>=1.5",
     "scipy>=1.13",
+    # Classical-radiomics feature extraction (Pan et al. 2024 baseline)
+    "pyradiomics>=3.1",
+    "pandas>=2.2",
+    "pyarrow>=17",         # parquet
     # Pipelines + config
     "snakemake>=8.16",
     "pyyaml>=6.0",
