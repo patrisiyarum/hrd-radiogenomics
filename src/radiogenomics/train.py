@@ -105,7 +105,13 @@ def _build_model(backbone: str) -> nn.Module:
         # trunk is randomly initialised and must train end-to-end.
         return load_monai_densenet(freeze_features=False)
     if backbone == "med3d":
-        return load_med3d(freeze_until=3)
+        # freeze_until=2 with the Tencent MedicalNet 23-dataset pretrained
+        # weights: freeze the stem + ResNet stages 1-2 (which encode generic
+        # CT features that transfer cleanly to ovarian imaging), fine-tune
+        # stages 3-4 + classifier on the 108 ovarian patients. With a true
+        # held-out test set this is the standard medical-imaging transfer
+        # recipe; freeze_until=3 was too aggressive for fine-tuning.
+        return load_med3d(freeze_until=2)
     raise ValueError(f"unknown backbone {backbone!r}")
 
 
