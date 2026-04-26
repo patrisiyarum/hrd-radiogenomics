@@ -26,6 +26,7 @@ def main() -> None:
     features_path = Path(sm.input.features)
     test_manifest_path = Path(sm.input.test_manifest)
     model_path = Path(sm.input.model)
+    clinical_path = Path(getattr(sm.input, "clinical", "")) if hasattr(sm.input, "clinical") else None
     out_path = Path(sm.output.report)
 
     with model_path.open("rb") as f:
@@ -41,7 +42,20 @@ def main() -> None:
     df = features.merge(
         test[["bcr_patient_barcode"]], on="bcr_patient_barcode", how="inner",
     )
-    logger.info("test cohort: %d patients with extracted features", len(df))
+
+    # Same clinical-merge step as training. Missing values get median-imputed
+    # using the test set's medians (the trainer already did its own imputation
+    # and the LASSO baked the relationship in; tiny test-set bias is fine
+    # given the alternative is dropping rows for one missing FIGO stage).
+    if clinical_path and clinical_path.exists():
+        clin = pd.read_parquet(clinical_path)
+        df = df.merge(clin, on="bcr_patient_barcode", how="left")
+        clin_cols = [c for c in df.columns if c.startswith("clin_")]
+        for c in clin_cols:
+            if df[c].isna().any():
+                df[c] = df[c].fillna(df[c].median())
+
+    logger.info("test cohort: %d patients", len(df))
 
     X = df[all_features].to_numpy(dtype=np.float32)
     X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)

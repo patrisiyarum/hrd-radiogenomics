@@ -140,14 +140,29 @@ rule radiomics_features:
         "scripts/extract_radiomics_features.py"
 
 
+rule clinical_features:
+    """Pull TCGA-OV clinical metadata (age, FIGO stage, tumor grade) from
+    GDC for every patient in the manifest. Adds the same kind of clinical
+    context Pan et al. 2024 fused into their LASSO."""
+    input:
+        manifest = DATA / "manifest.parquet",
+    output:
+        clinical = DATA / "clinical_features.parquet",
+    script:
+        "scripts/download_clinical_features.py"
+
+
 rule train_radiomics:
     """LASSO logistic-regression classifier on the dev split (108 patients).
 
     Mann-Whitney univariate filter -> LogisticRegressionCV (l1, saga,
     5-fold internal CV to pick alpha) -> refit on all dev patients.
+    Imaging features (intratumoral + peritumoral) get fused with clinical
+    features (age, FIGO stage, grade) as candidate features for the LASSO.
     Persists the fitted scaler + selected feature names + model."""
     input:
         features = DATA / "radiomics_features.parquet",
+        clinical = DATA / "clinical_features.parquet",
         dev_manifest = DATA / "manifest_dev.parquet",
     output:
         model = MODEL / "radiomics_lasso.pkl",
@@ -163,6 +178,7 @@ rule eval_radiomics_test:
     AUROCs are apples-to-apples comparable."""
     input:
         features = DATA / "radiomics_features.parquet",
+        clinical = DATA / "clinical_features.parquet",
         test_manifest = DATA / "manifest_test.parquet",
         model = MODEL / "radiomics_lasso.pkl",
     output:

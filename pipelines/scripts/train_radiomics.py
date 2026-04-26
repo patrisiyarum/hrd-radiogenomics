@@ -41,6 +41,7 @@ def main() -> None:
 
     features_path = Path(sm.input.features)
     dev_manifest_path = Path(sm.input.dev_manifest)
+    clinical_path = Path(getattr(sm.input, "clinical", "")) if hasattr(sm.input, "clinical") else None
     out_model_path = Path(sm.output.model)
     out_summary_path = Path(sm.output.summary)
 
@@ -49,9 +50,28 @@ def main() -> None:
     df = features.merge(
         dev[["bcr_patient_barcode"]], on="bcr_patient_barcode", how="inner",
     )
-    logger.info("dev cohort: %d patients with extracted features", len(df))
 
-    feat_cols = [c for c in df.columns if c.startswith(("intra_", "peri_"))]
+    # Optional clinical-feature merge. Pan et al. 2024 fused Ki-67 +
+    # family history into the LASSO; we use age, FIGO stage, and tumor
+    # grade since those are reliably available in TCGA-OV's GDC clinical
+    # schema. Missing values get median-imputed within the dev cohort
+    # so the LASSO doesn't see NaNs.
+    if clinical_path and clinical_path.exists():
+        clin = pd.read_parquet(clinical_path)
+        df = df.merge(clin, on="bcr_patient_barcode", how="left")
+        clin_cols = [c for c in df.columns if c.startswith("clin_")]
+        for c in clin_cols:
+            if df[c].isna().any():
+                med = df[c].median()
+                df[c] = df[c].fillna(med)
+        logger.info("merged %d clinical features (%s)", len(clin_cols), clin_cols)
+    else:
+        logger.info("no clinical features parquet; running on imaging features only")
+
+    logger.info("dev cohort: %d patients", len(df))
+
+    # All `intra_`, `peri_`, and `clin_` columns are candidate features.
+    feat_cols = [c for c in df.columns if c.startswith(("intra_", "peri_", "clin_"))]
     X = df[feat_cols].to_numpy(dtype=np.float32)
     # Replace any inf/NaN that PyRadiomics occasionally emits so sklearn doesn't choke.
     X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
