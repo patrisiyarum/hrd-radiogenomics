@@ -1,29 +1,35 @@
-"""Build a TCGA-BRCA external-validation manifest.
+"""Build an external-validation manifest from a different TCGA cohort.
 
-Mirrors `build_manifest.py` but for the breast-cancer cohort instead of
-ovarian. Produces `data/manifest_external_brca.parquet` — same schema as
-the OV manifest, used as a held-out external-validation cohort.
+Mirrors `build_manifest.py` but pulls a different cancer cohort instead
+of ovarian. Default cohort is **TCGA-UCEC (uterine)** because:
 
-Why this exists:
-    The v1 / v2 model is trained on TCGA-OV. Reporting test AUROC on a
-    held-out 27-patient OV split tells us in-distribution performance.
-    Reporting AUROC on TCGA-BRCA tells us whether the model is learning
-    *cancer-imaging signatures of HRD* (which transfer) or *ovarian-pelvis
-    artifacts* (which don't). The latter would be an over-fit story.
+  - It has CT imaging on TCIA (TCGA-BRCA does NOT — only MG + MRI, so
+    CT-trained models can't be validated on it).
+  - Same body region (pelvis) as OV → preprocessing pipeline works
+    without modification.
+  - Gynecologic cancer with shared HRD biology (BRCA1/2 mutations
+    drive a subset of UCEC via the same DNA-repair pathway).
+  - Has Knijnenburg HRD labels.
 
-    BRCA is the right external cohort: it has Knijnenburg HRD labels,
-    a TCIA imaging collection, and HRD-driven biology shares with OV
-    (BRCA1/2 mutations cause both cancers via the same DNA-repair
-    pathway). If a CT-trained HRD predictor generalizes anywhere, it
-    should generalize here.
+Other CT-bearing TCGA cohorts you can pass via --collection:
+  - TCGA-OV   (training cohort — use for sanity check, not external eval)
+  - TCGA-LUAD (lung adeno — different organ, different anatomy)
+  - TCGA-COAD (colon)
+  - TCGA-LIHC (liver)
+
+Why not TCGA-BRCA: TCIA's TCGA-BRCA only has mammography (MG) and MRI,
+no CT modality. A CT-trained model has nothing to score on it.
 
 Usage (on Lambda or any machine with network access):
-    uv run python scripts/build_brca_external_manifest.py --max-patients 50
+    uv run python scripts/build_brca_external_manifest.py \\
+        --collection TCGA-UCEC --max-patients 50
 
-The --max-patients cap exists because BRCA has ~300 patients with both
-labels and imaging; downloading + preprocessing all of them eats hours
-of Lambda time. 50 is enough for a first-pass external-validation AUROC
-with reasonable confidence intervals. Pass --max-patients 0 for "all".
+The --max-patients cap exists because cohorts are ~200-500 patients;
+downloading + preprocessing all of them eats hours of Lambda time. 50 is
+enough for a first-pass external-validation AUROC with reasonable
+confidence intervals. Pass --max-patients 0 for "all".
+
+Output filename includes the cohort: `data/manifest_external_<cohort>.parquet`.
 """
 
 from __future__ import annotations
@@ -50,9 +56,17 @@ def main() -> None:
         help="Knijnenburg supplementary table (already downloaded for OV)",
     )
     parser.add_argument(
+        "--collection",
+        type=str,
+        default="TCGA-UCEC",
+        help="TCIA collection name (default TCGA-UCEC — uterine cancer; "
+             "shares pelvis anatomy + HRD biology with OV, has CT modality)",
+    )
+    parser.add_argument(
         "--out",
         type=Path,
-        default=Path("data/manifest_external_brca.parquet"),
+        default=None,
+        help="Output parquet path (default data/manifest_external_<cohort>.parquet)",
     )
     parser.add_argument(
         "--max-patients",
@@ -67,6 +81,10 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    if args.out is None:
+        suffix = args.collection.lower().replace("-", "_")
+        args.out = Path(f"data/manifest_external_{suffix}.parquet")
+
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)-7s %(name)s | %(message)s",
@@ -79,10 +97,11 @@ def main() -> None:
             "Knijnenburg table — same file the OV manifest uses."
         )
 
-    # Same loader, different cohort filter.
-    hrd = load_hrd_labels(args.hrd_table, cohort="BRCA")
+    # Knijnenburg covers all 33 TCGA cohorts; the inner-join with TCIA's
+    # per-collection query does the cancer-type filtering.
+    hrd = load_hrd_labels(args.hrd_table)
     logger.info(
-        "Knijnenburg BRCA: %d patients (%d HRD / %d non-HRD)",
+        "Knijnenburg full table: %d patients (%d HRD / %d non-HRD)",
         len(hrd),
         (hrd["hrd_class"] == "HRD").sum(),
         (hrd["hrd_class"] == "non-HRD").sum(),
@@ -110,23 +129,21 @@ def main() -> None:
             (hrd["hrd_class"] == "non-HRD").sum(),
         )
 
-    # TCIA: pull CT series for the BRCA cohort. Note: TCGA-BRCA on TCIA has
-    # MULTIPLE collection identifiers historically (TCGA-BRCA is the canonical
-    # one). Most BRCA imaging is mammograms, but a subset has chest CTs which
-    # is what the model was trained on (HU values + soft-tissue window).
+    # TCIA: pull CT series for the chosen cohort. The collection query
+    # filters Knijnenburg's full TCGA table down to just the cancer type
+    # we want.
     tcia = search_tcia_ct_series(
         patient_barcodes=hrd["bcr_patient_barcode"].tolist(),
-        collection="TCGA-BRCA",
+        collection=args.collection,
         modality="CT",
     )
     if tcia.empty:
         sys.exit(
-            "no TCIA CT series found for TCGA-BRCA. The BRCA collection on "
-            "TCIA is mostly MR + mammography; CT is sparse. Try the wider "
-            "BRCA-Diagnosis or BREAST-DIAGNOSIS collections, or fall back to "
-            "MR if you adapt the preprocessing pipeline."
+            f"no TCIA CT series found for {args.collection}. Check that "
+            "this collection has CT modality (some TCGA cohorts only have "
+            "MR / MG / SR)."
         )
-    logger.info("TCIA: %d series found across BRCA cohort", len(tcia))
+    logger.info("TCIA: %d series found across %s cohort", len(tcia), args.collection)
 
     tcia_top = (
         tcia.sort_values("num_images", ascending=False)
