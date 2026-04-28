@@ -107,11 +107,46 @@ def main() -> None:
         (hrd["hrd_class"] == "non-HRD").sum(),
     )
 
+    # TCIA: pull CT series for the chosen cohort. The collection query
+    # filters Knijnenburg's full TCGA table down to just the cancer type
+    # we want. (Important: we have to query TCIA *before* subsampling
+    # Knijnenburg — otherwise a random 50-patient sample of all of TCGA
+    # is unlikely to overlap with the ~65 UCEC patients on TCIA.)
+    tcia = search_tcia_ct_series(
+        patient_barcodes=hrd["bcr_patient_barcode"].tolist(),
+        collection=args.collection,
+        modality="CT",
+    )
+    if tcia.empty:
+        sys.exit(
+            f"no TCIA CT series found for {args.collection}. Check that "
+            "this collection has CT modality (some TCGA cohorts only have "
+            "MR / MG / SR)."
+        )
+    logger.info("TCIA: %d series found across %s cohort", len(tcia), args.collection)
+
+    # Intersect HRD labels with imaging-available patients now, BEFORE
+    # subsampling. Otherwise a random sample of the full TCGA table almost
+    # never overlaps with the cohort's smaller imaging set.
+    hrd_with_imaging = hrd[hrd["bcr_patient_barcode"].isin(tcia["bcr_patient_barcode"])]
+    logger.info(
+        "intersection (HRD label + imaging in %s): %d patients (%d HRD / %d non-HRD)",
+        args.collection,
+        len(hrd_with_imaging),
+        (hrd_with_imaging["hrd_class"] == "HRD").sum(),
+        (hrd_with_imaging["hrd_class"] == "non-HRD").sum(),
+    )
+    if len(hrd_with_imaging) == 0:
+        sys.exit(
+            f"intersection of Knijnenburg and {args.collection} imaging is "
+            "empty. Either the collection has no patients in Knijnenburg's "
+            "table, or barcodes don't match."
+        )
+    hrd = hrd_with_imaging
+
     # Stratified subsample if requested. Keep the HRD/non-HRD ratio the same
-    # as the full cohort so the external-validation AUROC isn't biased by a
-    # weird class balance. Done as two separate samples + concat instead of
-    # groupby+apply because pandas 2.x groupby+apply has surprising
-    # interactions with index-vs-column membership of the grouping key.
+    # as the cohort so the external-validation AUROC isn't biased by a
+    # weird class balance.
     if args.max_patients > 0 and len(hrd) > args.max_patients:
         total = len(hrd)
         cap = args.max_patients
@@ -128,22 +163,6 @@ def main() -> None:
             (hrd["hrd_class"] == "HRD").sum(),
             (hrd["hrd_class"] == "non-HRD").sum(),
         )
-
-    # TCIA: pull CT series for the chosen cohort. The collection query
-    # filters Knijnenburg's full TCGA table down to just the cancer type
-    # we want.
-    tcia = search_tcia_ct_series(
-        patient_barcodes=hrd["bcr_patient_barcode"].tolist(),
-        collection=args.collection,
-        modality="CT",
-    )
-    if tcia.empty:
-        sys.exit(
-            f"no TCIA CT series found for {args.collection}. Check that "
-            "this collection has CT modality (some TCGA cohorts only have "
-            "MR / MG / SR)."
-        )
-    logger.info("TCIA: %d series found across %s cohort", len(tcia), args.collection)
 
     tcia_top = (
         tcia.sort_values("num_images", ascending=False)
