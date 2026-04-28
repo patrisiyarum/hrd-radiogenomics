@@ -140,13 +140,19 @@ def main() -> None:
         ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
         backbone = ckpt.get("model_card", {}).get("backbone", "med3d")
         model = _build_model(backbone)
-        # Strip wrapper prefix if any (matches API service logic).
-        raw_state = ckpt["model_state"]
-        for prefix in ("model.", "backbone."):
-            if all(k.startswith(prefix) for k in raw_state.keys()):
-                raw_state = {k.removeprefix(prefix): v for k, v in raw_state.items()}
-                break
-        model.load_state_dict(raw_state, strict=False)
+        # _build_model returns a wrapped module whose state_dict already has
+        # the "backbone." prefix. The saved checkpoint matches that exact
+        # layout, so we load it directly — DO NOT strip the prefix here.
+        # (The API service builds a bare backbone and so does need to strip;
+        # this script uses the training-repo wrapper and doesn't.)
+        missing, unexpected = model.load_state_dict(
+            ckpt["model_state"], strict=False,
+        )
+        if missing or unexpected:
+            logger.warning(
+                "fold %d: %d missing / %d unexpected keys — load mismatch",
+                fold_idx, len(missing), len(unexpected),
+            )
         model.to(device).eval()
 
         with torch.no_grad():
