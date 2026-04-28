@@ -41,6 +41,15 @@ class TrainConfig:
     lr: float = 1e-4
     n_folds: int = 5
     seed: int = 0
+    # When True, swap the light v1 augmentation for the v2 stack — adds
+    # Gaussian noise / blur / gamma (scanner-style perturbations) and
+    # MixUp pairing between batches. Targets cross-fold variance and
+    # scanner-generalization, the two main weaknesses of v1.
+    strong_augment: bool = False
+    # Probability of applying MixUp on each training batch. 0.0 disables.
+    # 0.3 with alpha=0.2 is a gentle setting good for small cohorts.
+    mixup_prob: float = 0.0
+    mixup_alpha: float = 0.2
 
 
 def train(cfg: TrainConfig) -> None:
@@ -74,12 +83,18 @@ def train(cfg: TrainConfig) -> None:
         )
         loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 
-        train_loader = _make_loader(train_df, cfg.batch_size, shuffle=True, augment=True)
+        train_loader = _make_loader(
+            train_df, cfg.batch_size, shuffle=True, augment=True,
+            strong_augment=cfg.strong_augment,
+        )
         val_loader = _make_loader(manifest.iloc[val_i], cfg.batch_size, shuffle=False, augment=False)
 
         best_auroc = 0.0
         for epoch in range(cfg.epochs):
-            _train_epoch(model, train_loader, opt, loss_fn, device)
+            _train_epoch(
+                model, train_loader, opt, loss_fn, device,
+                mixup_prob=cfg.mixup_prob, mixup_alpha=cfg.mixup_alpha,
+            )
             auroc = _eval_auroc(model, val_loader, device)
             if auroc > best_auroc:
                 best_auroc = auroc
@@ -115,23 +130,50 @@ def _build_model(backbone: str) -> nn.Module:
     raise ValueError(f"unknown backbone {backbone!r}")
 
 
-def _make_loader(df: pd.DataFrame, batch_size: int, shuffle: bool, augment: bool = False):
+def _make_loader(
+    df: pd.DataFrame,
+    batch_size: int,
+    shuffle: bool,
+    augment: bool = False,
+    strong_augment: bool = False,
+):
     # Deferred import so the scaffolding is inspectable without a MONAI install.
     from torch.utils.data import DataLoader
 
     from radiogenomics.dataset import VolumeDataset
 
-    return DataLoader(VolumeDataset(df, augment=augment), batch_size=batch_size, shuffle=shuffle)
+    return DataLoader(
+        VolumeDataset(df, augment=augment, strong_augment=strong_augment),
+        batch_size=batch_size, shuffle=shuffle,
+    )
 
 
-def _train_epoch(model, loader, opt, loss_fn, device) -> None:
+def _train_epoch(
+    model, loader, opt, loss_fn, device,
+    mixup_prob: float = 0.0, mixup_alpha: float = 0.2,
+) -> None:
+    """One pass over the loader. When mixup_prob > 0, randomly blend each
+    batch with a permuted copy of itself — interpolates both inputs and
+    targets by `lam ~ Beta(alpha, alpha)`. Strong regularizer for small
+    cohorts; gentle setting (prob=0.3, alpha=0.2) is enough.
+    """
     model.train()
     for x, y in loader:
         x = x.to(device)
         y = y.to(device).float()
         opt.zero_grad()
-        logits = model(x)
-        loss = loss_fn(logits, y)
+
+        if mixup_prob > 0.0 and float(np.random.rand()) < mixup_prob:
+            lam = float(np.random.beta(mixup_alpha, mixup_alpha))
+            perm = torch.randperm(x.size(0), device=device)
+            x = lam * x + (1.0 - lam) * x[perm]
+            y_a, y_b = y, y[perm]
+            logits = model(x)
+            loss = lam * loss_fn(logits, y_a) + (1.0 - lam) * loss_fn(logits, y_b)
+        else:
+            logits = model(x)
+            loss = loss_fn(logits, y)
+
         loss.backward()
         opt.step()
 
@@ -163,11 +205,16 @@ def main() -> None:
         epochs: int = 50,
         batch_size: int = 4,
         lr: float = 1e-4,
+        strong_augment: bool = False,
+        mixup_prob: float = 0.0,
+        mixup_alpha: float = 0.2,
     ) -> None:
         logging.basicConfig(level=logging.INFO)
         train(TrainConfig(
             manifest=manifest, backbone=backbone, output=output,
             epochs=epochs, batch_size=batch_size, lr=lr,
+            strong_augment=strong_augment,
+            mixup_prob=mixup_prob, mixup_alpha=mixup_alpha,
         ))
 
     app()
