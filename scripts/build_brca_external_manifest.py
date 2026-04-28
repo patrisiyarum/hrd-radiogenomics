@@ -90,14 +90,19 @@ def main() -> None:
 
     # Stratified subsample if requested. Keep the HRD/non-HRD ratio the same
     # as the full cohort so the external-validation AUROC isn't biased by a
-    # weird class balance.
+    # weird class balance. Done as two separate samples + concat instead of
+    # groupby+apply because pandas 2.x groupby+apply has surprising
+    # interactions with index-vs-column membership of the grouping key.
     if args.max_patients > 0 and len(hrd) > args.max_patients:
-        hrd = hrd.groupby("hrd_class", group_keys=False).apply(
-            lambda g: g.sample(
-                n=max(1, int(round(args.max_patients * len(g) / len(hrd.index)))),
-                random_state=args.seed,
-            )
-        ).reset_index(drop=True)
+        total = len(hrd)
+        cap = args.max_patients
+        parts = []
+        for cls in ("HRD", "non-HRD"):
+            sub = hrd[hrd["hrd_class"] == cls]
+            n = max(1, int(round(cap * len(sub) / total)))
+            n = min(n, len(sub))
+            parts.append(sub.sample(n=n, random_state=args.seed))
+        hrd = pd.concat(parts, ignore_index=True)
         logger.info(
             "subsampled to %d patients (%d HRD / %d non-HRD)",
             len(hrd),
